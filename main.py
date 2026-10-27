@@ -1,6 +1,4 @@
-def main():
-    print("Hello from finalproject-arutyunov-m26-555!")
-
+from valutatrade_hub.cli.interface import CLI
 
 if __name__ == "__main__":
-    main()
+    CLI().run()
