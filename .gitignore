@@ -1,4 +1,7 @@
 .venv
 .ruff_cache
+*.tmp
+.env
 dist/
 __pycache__/
+data/

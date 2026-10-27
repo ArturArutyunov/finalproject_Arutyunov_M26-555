@@ -1,7 +1,7 @@
 [project]
 name = "finalproject-arutyunov-m26-555"
 version = "0.1.0"
-description = "Add your description here"
+description = "Console application for currency trading platform simulation"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -12,3 +12,12 @@ dependencies = [
 dev = [
     "ruff>=0.17.2",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = ["venv", ".venv", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
