@@ -1,6 +1,7 @@
 import hmac
 
 from .utils import get_rates, hash_password, validate_currency_code
+from ..constants import MIN_PASSWORD_LENGTH, BASE_CURRENCY
 
 
 class User:
@@ -60,8 +61,11 @@ class User:
     def change_password(self, new_password: str) -> None:
         """Меняет пароль пользователя. (Длина - не менее 4 символов)"""
 
-        if not isinstance(new_password, str) or len(new_password) < 4:
-            raise ValueError("Пароль должен быть не короче 4 символов")
+        if (not isinstance(new_password, str)
+                or len(new_password) < MIN_PASSWORD_LENGTH):
+            raise ValueError(
+                f"Пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов"
+            )
         self._hashed_password = hash_password(new_password, self._salt)
 
     def verify_password(self, password: str) -> bool:
@@ -197,26 +201,26 @@ class Portfolio:
             return None
         return self._wallets.get(currency_code.strip().upper())
 
-    def get_total_value(self, base_currency="USD"):
+    def get_total_value(self, base_currency=BASE_CURRENCY):
         """Считает суммарную стоимость всех кошельков в основной валюте"""
 
         base = base_currency.strip().upper()
         rates = get_rates()
 
-        if base == "USD":
+        if base == BASE_CURRENCY:
             base_rate = 1.0
         else:
-            key = f"{base}_USD"
+            key = f"{base}_{BASE_CURRENCY}"
             if key not in rates:
                 raise ValueError(f"Курс для валюты {base} неизвестен")
             base_rate = rates[key]["rate"]
 
         total = 0.0
         for code, wallet in self._wallets.items():
-            if code == "USD":
+            if code == BASE_CURRENCY:
                 rate = 1.0
             else:
-                key = f"{code}_USD"
+                key = f"{code}_{BASE_CURRENCY}"
                 if key not in rates:
                     print(f"Курс для {code} неизвестен, валюта пропущена")
                     continue

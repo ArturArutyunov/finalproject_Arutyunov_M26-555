@@ -1,7 +1,12 @@
 import hashlib
 import json
 
-from ..constants import RATES_FILE
+from ..constants import (
+    RATES_FILE,
+    SMALL_RATE_THRESHOLD,
+    SMALL_RATE_DECIMALS,
+    LARGE_RATE_DECIMALS,
+)
 
 
 def hash_password(password, salt):
@@ -12,9 +17,9 @@ def hash_password(password, salt):
 def format_rate(value):
     """Форматирует курс: < 1 → 8 знаков, иначе 2 знака"""
 
-    if abs(value) < 1:
-        return f"{value:.8f}".rstrip("0").rstrip(".")
-    return f"{value:.2f}"
+    if abs(value) < SMALL_RATE_THRESHOLD:
+        return f"{value:.{SMALL_RATE_DECIMALS}f}".rstrip("0").rstrip(".")
+    return f"{value:.{LARGE_RATE_DECIMALS}f}"
 
 
 def format_timestamp(iso_str):

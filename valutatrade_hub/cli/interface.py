@@ -1,6 +1,11 @@
 from functools import wraps
 
-from valutatrade_hub.constants import DEFAULT_BASE_CURRENCY
+from valutatrade_hub.constants import (
+    BASE_CURRENCY,
+    BALANCE_DECIMALS,
+    MONEY_DECIMALS,
+    SEPARATOR_LENGTH,
+)
 from valutatrade_hub.core import usecases
 from valutatrade_hub.core.utils import format_rate, format_timestamp
 
@@ -109,7 +114,7 @@ class CLI:
             print("Ошибка: неверный формат аргументов")
             return
 
-        base = parsed.get("base", DEFAULT_BASE_CURRENCY)
+        base = parsed.get("base", BASE_CURRENCY)
 
         try:
             info = usecases.get_portfolio_info(self._current_user_id, base)
@@ -126,10 +131,10 @@ class CLI:
             return
 
         for row in info["wallets"]:
-            print(f"- {row['currency_code']}: {row['balance']:.4f}  "
-                  f"→ {row['value']:.2f} {info['base']}")
-        print("--------------------------------------------------------")
-        print(f"ИТОГО: {info['total']:,.2f} {info['base']}")
+            print(f"- {row['currency_code']}: {row['balance']:.{BALANCE_DECIMALS}f}  "
+                  f"→ {row['value']:.{MONEY_DECIMALS}f} {info['base']}")
+        print("-" * SEPARATOR_LENGTH)
+        print(f"ИТОГО: {info['total']:,.{MONEY_DECIMALS}f} {info['base']}")
 
     @login_required
     def cmd_buy(self, args):
@@ -159,13 +164,13 @@ class CLI:
             return
 
         code = result["currency_code"]
-        print(f"Покупка выполнена: {result['amount']:.4f} {code} "
-              f"по курсу {format_rate(result['rate'])} USD/{code}")
+        print(f"Покупка выполнена: {result['amount']:.{BALANCE_DECIMALS}f} {code} "
+              f"по курсу {format_rate(result['rate'])} {BASE_CURRENCY}/{code}")
         print("Изменения в портфеле:")
-        print(f"- {code}: было {result['balance_before']:.4f} "
-              f"→ стало {result['balance_after']:.4f}")
+        print(f"- {code}: было {result['balance_before']:.{BALANCE_DECIMALS}f} "
+              f"→ стало {result['balance_after']:.{BALANCE_DECIMALS}f}")
         print(f"Оценочная стоимость покупки: "
-              f"{result['cost_usd']:,.2f} USD")
+              f"{result['cost_usd']:,.{MONEY_DECIMALS}f} {BASE_CURRENCY}")
 
     @login_required
     def cmd_sell(self, args):
@@ -195,12 +200,12 @@ class CLI:
             return
 
         code = result["currency_code"]
-        print(f"Продажа выполнена: {result['amount']:.4f} {code} "
-              f"по курсу {format_rate(result['rate'])} USD/{code}")
+        print(f"Продажа выполнена: {result['amount']:.{BALANCE_DECIMALS}f} {code} "
+              f"по курсу {format_rate(result['rate'])} {BASE_CURRENCY}/{code}")
         print("Изменения в портфеле:")
-        print(f"- {code}: было {result['balance_before']:.4f} "
-              f"→ стало {result['balance_after']:.4f}")
-        print(f"Оценочная стоимость продажи: {result['income_usd']:,.2f} USD")
+        print(f"- {code}: было {result['balance_before']:.{BALANCE_DECIMALS}f} "
+              f"→ стало {result['balance_after']:.{BALANCE_DECIMALS}f}")
+        print(f"Оценочная стоимость продажи: {result['income_usd']:,.{MONEY_DECIMALS}f} {BASE_CURRENCY}")
 
     @login_required
     def cmd_get_rate(self, args):
