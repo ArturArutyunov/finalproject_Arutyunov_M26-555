@@ -2,9 +2,11 @@ import secrets
 from datetime import datetime
 
 from .models import Portfolio, User, Wallet
+from .currencies import get_currency
+from ..infra.settings import SettingsLoader
+from ..decorators import log_action
+from ..infra.database import DatabaseManager
 from ..constants import (
-    BASE_CURRENCY,
-    BALANCE_DECIMALS,
     MIN_PASSWORD_LENGTH,
     SALT_BYTES,
     PORTFOLIOS_FILE,
@@ -13,21 +15,23 @@ from ..constants import (
 from .utils import (
     get_rates,
     hash_password,
-    load_json,
-    save_json,
     validate_amount,
     validate_currency_code,
 )
 
 
+_BASE_CURRENCY = SettingsLoader().get("default_base_currency")
+
 def _next_user_id():
     """Возвращает следующий id для нового пользователя"""
 
-    users = load_json(USERS_FILE)
+    users = DatabaseManager().read(USERS_FILE)
     if not isinstance(users, list) or not users:
         return 1
     return max(u.get("user_id", 0) for u in users) + 1
 
+
+@log_action("REGISTER")
 def register_user(username, password):
     """Регистрирует нового пользователя в системе"""
 
@@ -37,7 +41,8 @@ def register_user(username, password):
     if not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Пароль должен быть не короче {MIN_PASSWORD_LENGTH} символов")
 
-    users = load_json(USERS_FILE)
+    db = DatabaseManager()
+    users = db.read(USERS_FILE)
     if not isinstance(users, list):
         users = []
     for record in users:
@@ -58,20 +63,22 @@ def register_user(username, password):
         "salt": salt,
         "registration_date": registration_date.isoformat(),
     })
-    save_json(USERS_FILE, users)
+    db.write(USERS_FILE, users)
 
-    portfolios = load_json(PORTFOLIOS_FILE)
+
+    portfolios = db.read(PORTFOLIOS_FILE)
     if not isinstance(portfolios, list):
         portfolios = []
     portfolios.append({"user_id": user_id, "wallets": {}})
-    save_json(PORTFOLIOS_FILE, portfolios)
+    db.write(PORTFOLIOS_FILE, portfolios)
 
     return user
+
 
 def load_user_by_id(user_id):
     """Возвращает объект User из users.json по id (или None)"""
 
-    users = load_json(USERS_FILE)
+    users = DatabaseManager().read(USERS_FILE)
     if not isinstance(users, list):
         return None
     for record in users:
@@ -85,13 +92,15 @@ def load_user_by_id(user_id):
             )
     return None
 
+
+@log_action("LOGIN")
 def login(username, password):
     """Провреяет имя/пароль. При успешной валидации возвращает user_id"""
     
     if not isinstance(username, str) or not isinstance(password, str):
         raise ValueError("Пользователь не найден")
 
-    users = load_json(USERS_FILE)
+    users = DatabaseManager().read(USERS_FILE)
     if not isinstance(users, list):
         users = []
 
@@ -131,15 +140,15 @@ def get_rate_value(from_code, to_code, rates):
         return 1.0 / rates[inverse]["rate"]
 
     # кросс через USD
-    from_usd = 1.0 if from_code == BASE_CURRENCY else None
-    to_usd = 1.0 if to_code == BASE_CURRENCY else None
+    from_usd = 1.0 if from_code == _BASE_CURRENCY else None
+    to_usd = 1.0 if to_code == _BASE_CURRENCY else None
     if from_usd is None:
-        key = f"{from_code}_{BASE_CURRENCY}"
+        key = f"{from_code}_{_BASE_CURRENCY}"
         if key not in rates:
             raise ValueError(f"Курс {from_code}→{to_code} недоступен")
         from_usd = rates[key]["rate"]
     if to_usd is None:
-        key = f"{to_code}_{BASE_CURRENCY}"
+        key = f"{to_code}_{_BASE_CURRENCY}"
         if key not in rates:
             raise ValueError(f"Курс {from_code}→{to_code} недоступен")
         to_usd = rates[key]["rate"]
@@ -159,7 +168,7 @@ def convert(amount, from_code, to_code, rates=None):
 def load_portfolio(user_id):
     """Возвращает портфель пользователя из portfolios.json"""
 
-    portfolios = load_json(PORTFOLIOS_FILE)
+    portfolios = DatabaseManager().read(PORTFOLIOS_FILE)
     if not isinstance(portfolios, list):
         portfolios = []
 
@@ -176,33 +185,22 @@ def load_portfolio(user_id):
 def save_portfolio(portfolio):
     """Сохраняет портфель в portfolios.json"""
 
-    portfolios = load_json(PORTFOLIOS_FILE)
-    if not isinstance(portfolios, list):
-        portfolios = []
-
-    wallets_data = {}
-    for code, wallet in portfolio.wallets.items():
-        wallets_data[code] = {"balance": wallet.balance}
-
+    wallets_data = {
+        code: {"balance": wallet.balance}
+        for code, wallet in portfolio.wallets.items()
+    }
     record = {"user_id": portfolio.user_id, "wallets": wallets_data}
-
-    for i, existing in enumerate(portfolios):
-        if existing.get("user_id") == portfolio.user_id:
-            portfolios[i] = record
-            break
-    else:
-        portfolios.append(record)
-
-    save_json(PORTFOLIOS_FILE, portfolios)
+    DatabaseManager().update(PORTFOLIOS_FILE, record, key="user_id")
 
 
-def get_portfolio_info(user_id, base_currency=BASE_CURRENCY):
+def get_portfolio_info(user_id, base_currency=_BASE_CURRENCY):
     """Возвращает данные портфеля для отображения"""
 
-    base = validate_currency_code(base_currency)
+    base_currency_obj = get_currency(base_currency)
+    base = base_currency_obj.code
     rates = get_rates()
 
-    if base != {BASE_CURRENCY} and f"{base}_{BASE_CURRENCY}" not in rates and f"{BASE_CURRENCY}_{base}" not in rates:
+    if base != _BASE_CURRENCY and f"{base}_{_BASE_CURRENCY}" not in rates and f"{_BASE_CURRENCY}_{base}" not in rates:
         raise ValueError(f"Неизвестная базовая валюта '{base}'")
 
     portfolio = load_portfolio(user_id)
@@ -230,6 +228,7 @@ def get_portfolio_info(user_id, base_currency=BASE_CURRENCY):
     }
 
 
+@log_action("BUY", verbose=True, base=_BASE_CURRENCY)
 def buy(user_id, currency_code, amount):
     """Купить amount валюты currency_code (зачисление на кошелёк).
     USD не списывается. Если кошелька currency_code нет — создаёт.
@@ -237,15 +236,16 @@ def buy(user_id, currency_code, amount):
     """
 
     validate_amount(amount)
-    code = validate_currency_code(currency_code)
-    if code == BASE_CURRENCY:
-        raise ValueError(f"Нельзя купить {BASE_CURRENCY} за {BASE_CURRENCY}")
+    currency = get_currency(currency_code)
+    code = code = currency.code
+    if code == _BASE_CURRENCY:
+        raise ValueError(f"Нельзя купить {_BASE_CURRENCY} за {_BASE_CURRENCY}")
 
     rates = get_rates()
     try:
-        rate = get_rate_value(code, BASE_CURRENCY, rates)
+        rate = get_rate_value(code, _BASE_CURRENCY, rates)
     except ValueError:
-        raise ValueError(f"Не удалось получить курс для {code}→{BASE_CURRENCY}")
+        raise ValueError(f"Не удалось получить курс для {code}→{_BASE_CURRENCY}")
 
     portfolio = load_portfolio(user_id)
 
@@ -268,21 +268,23 @@ def buy(user_id, currency_code, amount):
     }
 
 
+@log_action("SELL", verbose=True, base=_BASE_CURRENCY)
 def sell(user_id, currency_code, amount):
     """Продать amount валюты currency_code (списание с кошелька).
     USD не начисляется. Для отчёта считает 
     оценочную выручку amount * rate в USD"""
 
     validate_amount(amount)
-    code = validate_currency_code(currency_code)
-    if code == BASE_CURRENCY:
-        raise ValueError(f"Нельзя продать {BASE_CURRENCY} за {BASE_CURRENCY}")
+    currency = get_currency(currency_code)
+    code = currency.code
+    if code == _BASE_CURRENCY:
+        raise ValueError(f"Нельзя продать {_BASE_CURRENCY} за {_BASE_CURRENCY}")
 
     rates = get_rates()
     try:
-        rate = get_rate_value(code, BASE_CURRENCY, rates)
+        rate = get_rate_value(code, _BASE_CURRENCY, rates)
     except ValueError:
-        raise ValueError(f"Не удалось получить курс для {code}→{BASE_CURRENCY}")
+        raise ValueError(f"Не удалось получить курс для {code}→{_BASE_CURRENCY}")
 
     portfolio = load_portfolio(user_id)
 
@@ -290,13 +292,7 @@ def sell(user_id, currency_code, amount):
     if wallet is None:
         raise ValueError(
             f"У вас нет кошелька '{code}'. Добавьте валюту: "
-            f"она создаётся автоматически при первой покупке."
-        )
-
-    if amount > wallet.balance:
-        raise ValueError(
-            f"Недостаточно средств: доступно {wallet.balance:.{BALANCE_DECIMALS}f} {code}, "
-            f"требуется {amount:.{BALANCE_DECIMALS}f} {code}"
+            f"она создаётся автоматически при первой покупке"
         )
 
     balance_before = wallet.balance
@@ -312,12 +308,15 @@ def sell(user_id, currency_code, amount):
         "balance_after": wallet.balance,
     }
 
-def get_rate_info(from_code, to_code):
+def get_rate_info(code_from, code_to):
     """Возвращает курс from_code → to_code и метку времени обновления.
     Поддерживает прямой ключ, обратный и кросс через USD"""
 
-    from_code = validate_currency_code(from_code)
-    to_code = validate_currency_code(to_code)
+    from_currency = get_currency(code_from)
+    to_currency = get_currency(code_to)
+
+    from_code = from_currency.code
+    to_code = to_currency.code
     rates = get_rates()
 
     direct_key = f"{from_code}_{to_code}"
@@ -334,15 +333,15 @@ def get_rate_info(from_code, to_code):
         updated_at = rates[inverse_key].get("updated_at")
     else:
         try:
-            from_usd = 1.0 if from_code == BASE_CURRENCY else rates[f"{from_code}_{BASE_CURRENCY}"]["rate"]
-            to_usd = 1.0 if to_code == BASE_CURRENCY else rates[f"{to_code}_{BASE_CURRENCY}"]["rate"]
+            from_usd = 1.0 if from_code == _BASE_CURRENCY else rates[f"{from_code}_{_BASE_CURRENCY}"]["rate"]
+            to_usd = 1.0 if to_code == _BASE_CURRENCY else rates[f"{to_code}_{_BASE_CURRENCY}"]["rate"]
             rate = from_usd / to_usd
 
             stamps = []
-            if from_code != BASE_CURRENCY:
-                stamps.append(rates[f"{from_code}_{BASE_CURRENCY}"].get("updated_at"))
-            if to_code != BASE_CURRENCY:
-                stamps.append(rates[f"{to_code}_{BASE_CURRENCY}"].get("updated_at"))
+            if from_code != _BASE_CURRENCY:
+                stamps.append(rates[f"{from_code}_{_BASE_CURRENCY}"].get("updated_at"))
+            if to_code != _BASE_CURRENCY:
+                stamps.append(rates[f"{to_code}_{_BASE_CURRENCY}"].get("updated_at"))
             stamps = [s for s in stamps if s]
             updated_at = max(stamps) if stamps else None
         except KeyError:

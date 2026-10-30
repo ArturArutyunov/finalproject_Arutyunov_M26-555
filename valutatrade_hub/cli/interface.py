@@ -8,6 +8,12 @@ from valutatrade_hub.constants import (
 )
 from valutatrade_hub.core import usecases
 from valutatrade_hub.core.utils import format_rate, format_timestamp
+from valutatrade_hub.core.currencies import supported_codes
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 
 
 def login_required(func):
@@ -29,13 +35,16 @@ class CLI:
         """Конструктор класса"""
 
         self._current_user_id = None
+        self._current_username = None
         self._commands = {
             "register": self.cmd_register,
             "login": self.cmd_login,
+            "logout": self.cmd_logout,
             "show-portfolio": self.cmd_show_portfolio,
             "buy": self.cmd_buy,
             "sell": self.cmd_sell,
             "get-rate": self.cmd_get_rate,
+            "help": self.cmd_help,
         }
 
     # хелперы
@@ -86,6 +95,11 @@ class CLI:
         """Авторизация в приложении.
         Обработчик команды login --username X --password Y"""
 
+        if self._current_user_id is not None:
+            print(f"Вы уже вошли как '{self._current_username}'. "
+                  f"Сначала завершите текущую сессию")
+            return
+
         parsed = self._parse_args(args)
         if parsed is None:
             print("Ошибка: неверный формат аргументов")
@@ -101,7 +115,18 @@ class CLI:
             return
 
         self._current_user_id = user_id
+        self._current_username = parsed["username"]
         print(f"Вы вошли как '{parsed['username']}'")
+
+
+    @login_required
+    def cmd_logout(self, args):
+        """Обработчик команды logout"""
+
+        self._current_user_id = None
+        self._current_username = None
+        print("Вы вышли из системы")
+
 
     @login_required
     def cmd_show_portfolio(self, args):
@@ -118,6 +143,14 @@ class CLI:
 
         try:
             info = usecases.get_portfolio_info(self._current_user_id, base)
+        except CurrencyNotFoundError as e:
+            print(e)
+            print(f"Поддерживаемые валюты: {', '.join(supported_codes())}")
+            return
+        except ApiRequestError as e:
+            print(e)
+            print("Повторите попытку позже")
+            return
         except ValueError as e:
             print(e)
             return
@@ -159,6 +192,17 @@ class CLI:
             result = usecases.buy(
                 self._current_user_id, parsed["currency"], amount
             )
+        except InsufficientFundsError as e:
+            print(e)
+            return
+        except CurrencyNotFoundError as e:
+            print(e)
+            print(f"Поддерживаемые валюты: {', '.join(supported_codes())}")
+            return
+        except ApiRequestError as e:
+            print(e)
+            print("Повторите попытку позже")
+            return
         except (ValueError, RuntimeError) as e:
             print(e)
             return
@@ -195,6 +239,17 @@ class CLI:
             result = usecases.sell(
                 self._current_user_id, parsed["currency"], amount
             )
+        except InsufficientFundsError as e:
+            print(e)
+            return
+        except CurrencyNotFoundError as e:
+            print(e)
+            print(f"Поддерживаемые валюты: {', '.join(supported_codes())}")
+            return
+        except ApiRequestError as e:
+            print(e)
+            print("Повторите попытку позже")
+            return
         except (ValueError, RuntimeError) as e:
             print(e)
             return
@@ -222,6 +277,14 @@ class CLI:
 
         try:
             info = usecases.get_rate_info(parsed["from"], parsed["to"])
+        except CurrencyNotFoundError as e:
+            print(e)
+            print(f"Поддерживаемые валюты: {', '.join(supported_codes())}")
+            return
+        except ApiRequestError as e:
+            print(e)
+            print("Повторите попытку позже")
+            return
         except ValueError as e:
             print(e)
             return
@@ -236,6 +299,19 @@ class CLI:
             rev_updated = format_timestamp(info["reverse_updated_at"])
             print(f"Обратный курс {info['to']}→{info['from']}: "
                   f"{rev_str} (обновлено: {rev_updated})")
+
+    def cmd_help(self, args):
+        """Обработать help."""
+        print("Доступные команды:")
+        print("  register --username <имя> --password <пароль>   — регистрация")
+        print("  login --username <имя> --password <пароль>      — вход")
+        print("  logout                                          — выход из системы")
+        print("  show-portfolio [--base <код>]                   — портфель и итог")
+        print("  buy --currency <код> --amount <число>           — покупка")
+        print("  sell --currency <код> --amount <число>          — продажа")
+        print("  get-rate --from <код> --to <код>                — курс")
+        print("  help                                            — эта справка")
+        print("  exit / quit                                     — выход из REPL")
             
     # диспетчеризация и repl
 

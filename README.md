@@ -67,6 +67,11 @@ python main.py
 Все команды, кроме `register` и `login`, требуют активного сеанса —
 иначе выводится `Сначала выполните login`.
 
+
+### help
+Вывести справку о доступных командах.
+
+
 ### register
 Создать пользователя и пустой портфель.
 ```bash
@@ -79,6 +84,12 @@ register --username <имя> --password <пароль>
 Войти в систему.
 ```bash
 login --username <имя> --password <пароль>
+```
+
+### logout
+Выйти из системы.
+```bash
+logout
 ```
 
 ### show-portfolio
@@ -110,3 +121,24 @@ sell --currency <код> --amount <число>
 ```bash
 get-rate --from <код> --to <код>
 ```
+
+## Логирование
+
+Логи пишутся **только в файл** (консоль не используется), настраиваются
+в `valutatrade_hub/logging_config.py` (`setup_logging()` вызывается в `main.py`).
+
+- **Файл:** `logs/actions.log` (ключ `log_file`).
+- **Формат:** строковый, задаётся `log_format` (по умолчанию
+  `%(asctime)s %(levelname)s %(name)s: %(message)s`).
+- **Уровень:** `log_level` (`INFO` по умолчанию).
+- **Ротация:** `log_rotation` = `time` (по дням, архивы
+  `actions.log.YYYY-MM-DD`) или `size` (по размеру, `actions.log.1`, …).
+  `log_backup_count` — сколько архивов хранить, `log_file_size` — размер
+  файла для `size` (байт).
+
+**Декоратор `@log_action`** (`valutatrade_hub/decorators.py`) оборачивает
+`buy`, `sell`, `register_user`, `login`. Пишет:
+- `INFO ... result=OK` — с полями `user_id`, `currency`, `amount`, `rate`,
+  `base` (для buy/sell), `balance_before`/`balance_after` (`verbose=True`);
+- `ERROR ... result=ERROR` — с `error_type`, `error_message`; исключение
+  пробрасывается (пользователь видит ту же ошибку).

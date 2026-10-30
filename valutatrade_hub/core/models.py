@@ -1,6 +1,7 @@
 import hmac
 
 from .utils import get_rates, hash_password, validate_currency_code
+from .exceptions import InsufficientFundsError
 from ..constants import MIN_PASSWORD_LENGTH, BASE_CURRENCY
 
 
@@ -135,7 +136,9 @@ class Wallet:
         if amount <= 0:
             raise ValueError("Сумма снятия должна быть положительной")
         if amount > self._balance:
-            raise RuntimeError("Недостаточно средств на балансе")
+            raise InsufficientFundsError(
+                self._balance, amount, self._currency_code
+            )
         self.balance = self._balance - amount
 
     def get_balance_info(self):
