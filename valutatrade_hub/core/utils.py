@@ -1,7 +1,16 @@
 import hashlib
-import json
+from datetime import datetime
 
-from ..constants import RATES_FILE
+from ..constants import (
+    RATES_FILE,
+    RATES_TTL_DEFAULT,
+    SMALL_RATE_THRESHOLD,
+    SMALL_RATE_DECIMALS,
+    LARGE_RATE_DECIMALS,
+)
+from ..infra.database import DatabaseManager
+from ..infra.settings import BASE_DIR, SettingsLoader
+from .exceptions import ApiRequestError
 
 
 def hash_password(password, salt):
@@ -12,9 +21,9 @@ def hash_password(password, salt):
 def format_rate(value):
     """Форматирует курс: < 1 → 8 знаков, иначе 2 знака"""
 
-    if abs(value) < 1:
-        return f"{value:.8f}".rstrip("0").rstrip(".")
-    return f"{value:.2f}"
+    if abs(value) < SMALL_RATE_THRESHOLD:
+        return f"{value:.{SMALL_RATE_DECIMALS}f}".rstrip("0").rstrip(".")
+    return f"{value:.{LARGE_RATE_DECIMALS}f}"
 
 
 def format_timestamp(iso_str):
@@ -26,42 +35,62 @@ def format_timestamp(iso_str):
         return "нет данных"
     return str(iso_str).replace("T", " ").split(".")[0]
 
-# Функции для работы с json
 
-def load_json(path, fallback=None):
-    """Возвращает содержимое из JSON-файла.
-    Если файла нет, он пуст или содержит 
-    битый JSON — вернет fallback, или []
-    """
+def refresh_rates():
+    """Обновить курсы через Parser Service"""
 
-    if fallback is None:
-        fallback = []
-    if not path.exists():
-        return fallback
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return fallback
+    raise ApiRequestError("Курсы устарели, Parser Service недоступен")
 
 
-def save_json(path, data):
-    """Записывает данные в JSON-файл (создаёт папку при необходимости)"""
+def _extract_rates(raw):
+    """Достать (data, meta) из прочитанного rates.json"""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def get_rates():
-    """Возвращает словарь курсов из rates.json"""
-    
-    rates = load_json(RATES_FILE, {})
-    if not isinstance(rates, dict):
-        return {}
-    data = rates.get("data", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    meta = raw.get("meta", {})
+    if not isinstance(meta, dict):
+        meta = {}
+    data = raw.get("data", {})
     if not isinstance(data, dict):
-        return {}
+        data = {}
+    return data, meta
+
+
+def _is_rates_fresh(meta):
+    """Проверяет свежий ли кеш курсов"""
+
+    last_refresh = meta.get("last_refresh")
+    if not last_refresh:
+        return False
+    try:
+        refreshed_at = datetime.fromisoformat(last_refresh)
+    except (TypeError, ValueError):
+        return False
+
+    if refreshed_at.tzinfo is not None:
+        now = datetime.now(refreshed_at.tzinfo)
+    else:
+        now = datetime.now()
+
+    ttl = SettingsLoader().get("rates_ttl_seconds", RATES_TTL_DEFAULT)
+    age_seconds = (now - refreshed_at).total_seconds()
+    return age_seconds < ttl
+
+
+def get_rates(with_meta=False):
+    """Возвращает словарь курсов из rates.json
+    Если кеш устарел — вызывает refresh_rates(). Если refresh_rates()
+    бросает ApiRequestError — пробрасывает дальше"""
+
+    db = DatabaseManager()
+    data, meta = _extract_rates(db.read(RATES_FILE, {}))
+
+    if not _is_rates_fresh(meta):
+        refresh_rates()
+        data, meta = _extract_rates(db.read(RATES_FILE, {}))
+
+    if with_meta:
+        return data, meta
     return data
 
 
