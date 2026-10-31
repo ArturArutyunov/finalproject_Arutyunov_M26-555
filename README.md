@@ -10,7 +10,48 @@
 
 - **Python 3.12+**
 
----
+## Установка
+
+```bash
+# вариант с uv (рекомендуется)
+uv sync
+```
+
+## Структура проекта
+```
+finalproject
+├── data/
+│ ├── users.json            # пользователи
+│ ├── portfolios.json       # портфели и кошельки
+│ ├── rates.json            # снимок курсов для Core
+│ └── exchange_rates.json   # история замеров
+├── valutatrade_hub/
+│ ├── constants.py          # константы кода
+│ ├── logging_config.py     # настройка логов
+│ ├── decorators.py         # декораторы
+│ ├── core/
+│ │ ├── currencies.py       # Классы валют
+│ │ ├── exceptions.py       # доменные исключения
+│ │ ├── models.py           # User, Wallet, Portfolio
+│ │ ├── usecases.py         # register/login/buy/sell/get_rate/...
+│ │ └── utils.py            # курсы (TTL), хеш, валидаторы, формат
+│ ├── infra/
+│ │ ├── settings.py         # Singleton SettingsLoader
+│ │ └── database.py         # Singleton DatabaseManager
+│ ├── parser_service/
+│ │ ├── config.py           # конфигурация API и параметров обновления
+│ │ ├── api_clients.py      # работа с внешними API
+│ │ ├── storage.py          # операции чтения/записи exchange_rates.json
+│ │ ├── updater.py          # основной модуль обновления курсов
+│ │ └── scheduler.py        # планировщик периодического обновления
+│ └── cli/
+│ └── interface.py          # CLI-команды
+├── main.py
+├── pyproject.toml
+├── .env.example            # образец-пример с переменными окружения
+├── README.md
+└── .gitignore
+```
 
 ## Запуск
 
@@ -20,7 +61,7 @@ python main.py
 
 Появится приглашение:
 
-`ValutaTrade Hub. Введите команду (exit/quit для выхода)`
+`ValutaTrade Hub. Введите команду (help - для получения списка досутпных команд. exit/quit для выхода)`
 
 Выход — `exit`, `quit` или Ctrl+C.
 
@@ -30,32 +71,19 @@ python main.py
 ---
 ## Формат `rates.json`
 
-Файл data/rates.json — объект с meta (служебное) и data (курсы):
+Файл data/rates.json — объект с last_refresh (служебное) и pairs (курсы):
 
 ```json
 {
-  "meta": {
-    "source": "ParserService",
-    "last_refresh": "2026-10-25T10:35:00"
+  "pairs": {
+    "BTC_USD": {"rate": 59337.21, "updated_at": "2026-10-31T00:00:00Z", "source": "CoinGecko"},
+    "ETH_USD": {"rate": 3720.00, "updated_at": "2026-10-31T00:00:00Z", "source": "CoinGecko"},
+    "SOL_USD": {"rate": 180.50, "updated_at": "2026-10-31T00:00:00Z", "source": "CoinGecko"},
+    "EUR_USD": {"rate": 1.0786, "updated_at": "2026-10-31T00:00:00Z", "source": "ExchangeRate-API"},
+    "GBP_USD": {"rate": 1.27, "updated_at": "2026-10-31T00:00:00Z", "source": "ExchangeRate-API"},
+    "RUB_USD": {"rate": 0.01016, "updated_at": "2026-10-31T00:00:00Z", "source": "ExchangeRate-API"}
   },
-  "data": {
-    "BTC_USD": {
-      "rate": 80607.61,
-      "updated_at": "2026-10-25T10:29:42"
-    },
-    "ETH_USD": {
-      "rate": 2336.00,
-      "updated_at": "2026-10-25T10:35:00"
-    },
-    "EUR_USD": {
-      "rate": 1.1203,
-      "updated_at": "2026-10-25T10:30:00"
-    },
-    "RUB_USD": {
-      "rate": 0.0124,
-      "updated_at": "2026-10-25T10:31:12"
-    }
-  }
+  "last_refresh": "2026-10-31T00:00:00Z"
 }
 ```
 
@@ -64,8 +92,10 @@ python main.py
 
 Общий формат аргументов: `--ключ значение` (через пробел).
 Коды валют нормализуются (`usd` → `USD`).
-Все команды, кроме `register` и `login`, требуют активного сеанса —
-иначе выводится `Сначала выполните login`.
+
+**Требуют логина**: `logout`, `show-portfolio`, `buy`, `sell`, `get-rate`.
+
+**Доступны без логина:** `register`, `login`, `update-rates`, `show-rates`, `help`.
 
 
 ### help
@@ -93,18 +123,22 @@ logout
 ```
 
 ### show-portfolio
-Показать все кошельки и итоговую стоимость
+Показать все кошельки и итоговую стоимость.
+
 ```bash
-show-portfolio
+show-portfolio [--base <код>]
 ```
+- --`base` — базовая валюта конвертации (по умолчанию USD).
 
 ### buy
 Купить валюту (зачислить на кошелёк). USD не списывается.
+
 ```bash
 buy --currency <код> --amount <число>
 ```
+
 - `--currency ` — код валюты
-- `--password` — количество, > 0
+- `--amount` — количество, > 0
 - Если кошелька нет — создаётся автоматически
 
 ### sell
@@ -113,7 +147,7 @@ buy --currency <код> --amount <число>
 sell --currency <код> --amount <число>
 ```
 - `--currency ` — код валюты
-- `--password` — количество, > 0
+- `--amount` — количество, > 0
 - Кошелёк должен существовать
 
 ### get-rate
@@ -122,12 +156,36 @@ sell --currency <код> --amount <число>
 get-rate --from <код> --to <код>
 ```
 
+### show-rates
+
+Показать актуальные курсы из локального кеша `data/rates.json`.
+
+```bash
+show-rates [--currency <код>] [--top <N>] [--base <код>]
+```
+- `--currency` — только указанная валюта.
+- `--top` — N самых дорогих криптовалют (по курсу).
+- `--base` — пересчёт всех курсов относительно указанной базы (через USD).
+
+### update-rates
+
+Запустить немедленное обновление курсов через Parser Service.
+
+```bash
+update-rates [--source <coingecko|exchangerate>]
+```
+Без `--source` — оба источника.
+
+Требует `EXCHANGERATE_API_KEY` (в .env) для фиатных курсов.
+
+Подробности шагов — в **logs/parser.log**.
+
 ## Логирование
 
 Логи пишутся **только в файл** (консоль не используется), настраиваются
 в `valutatrade_hub/logging_config.py` (`setup_logging()` вызывается в `main.py`).
 
-- **Файл:** `logs/actions.log` (ключ `log_file`).
+- **Файлы:** `logs/actions.log` (Core, `log_file`) и `logs/parser.log` (Parser Service, `parser_log_file`).
 - **Формат:** строковый, задаётся `log_format` (по умолчанию
   `%(asctime)s %(levelname)s %(name)s: %(message)s`).
 - **Уровень:** `log_level` (`INFO` по умолчанию).
@@ -142,3 +200,29 @@ get-rate --from <код> --to <код>
   `base` (для buy/sell), `balance_before`/`balance_after` (`verbose=True`);
 - `ERROR ... result=ERROR` — с `error_type`, `error_message`; исключение
   пробрасывается (пользователь видит ту же ошибку).
+
+
+## Parser Service
+
+Отдельный микросервис — собирает курсы с CoinGecko (крипта) и
+ExchangeRate-API (фиат), пишет:
+- `data/exchange_rates.json` — история всех замеров (дедуп по `id`);
+- `data/rates.json` — снимок текущих курсов (Core читает его).
+
+### API-ключ
+
+ExchangeRate-API требует ключ. Создайте `.env` в корне проекта (по образцу `.env.example`):
+
+```bash
+EXCHANGERATE_API_KEY=your_key_here
+```
+
+### Запуск
+
+```bash
+# вручную, одноразово (из CLI Core)
+> update-rates
+
+# как микросервис (по таймеру)
+python -m valutatrade_hub.parser_service.scheduler
+```

@@ -1,16 +1,23 @@
 import hashlib
+import math
 from datetime import datetime
 
 from ..constants import (
+    LARGE_RATE_DECIMALS,
     RATES_FILE,
     RATES_TTL_DEFAULT,
-    SMALL_RATE_THRESHOLD,
     SMALL_RATE_DECIMALS,
-    LARGE_RATE_DECIMALS,
+    SMALL_RATE_THRESHOLD,
 )
 from ..infra.database import DatabaseManager
-from ..infra.settings import BASE_DIR, SettingsLoader
-from .exceptions import ApiRequestError
+from ..infra.settings import SettingsLoader
+from ..parser_service.api_clients import (
+    CoinGeckoClient,
+    ExchangeRateApiClient,
+)
+from ..parser_service.config import ParserConfig
+from ..parser_service.storage import ParserStorage
+from ..parser_service.updater import RatesUpdater
 
 
 def hash_password(password, salt):
@@ -39,69 +46,67 @@ def format_timestamp(iso_str):
 def refresh_rates():
     """Обновить курсы через Parser Service"""
 
-    raise ApiRequestError("Курсы устарели, Parser Service недоступен")
-
+    config = ParserConfig()
+    updater = RatesUpdater(
+        clients=[CoinGeckoClient(config), ExchangeRateApiClient(config)],
+        storage=ParserStorage(),
+    )
+    updater.run_update()
 
 def _extract_rates(raw):
-    """Достать (data, meta) из прочитанного rates.json"""
+    """Достать (pairs, last_refresh) из прочитанного rates.json"""
 
     if not isinstance(raw, dict):
         raw = {}
-    meta = raw.get("meta", {})
-    if not isinstance(meta, dict):
-        meta = {}
-    data = raw.get("data", {})
-    if not isinstance(data, dict):
-        data = {}
-    return data, meta
+    pairs = raw.get("pairs", {})
+    if not isinstance(pairs, dict):
+        pairs = {}
+    return pairs, raw.get("last_refresh")
 
 
-def _is_rates_fresh(meta):
+def _is_rates_fresh(last_refresh):
     """Проверяет свежий ли кеш курсов"""
 
-    last_refresh = meta.get("last_refresh")
     if not last_refresh:
         return False
     try:
         refreshed_at = datetime.fromisoformat(last_refresh)
     except (TypeError, ValueError):
         return False
-
     if refreshed_at.tzinfo is not None:
         now = datetime.now(refreshed_at.tzinfo)
     else:
         now = datetime.now()
-
     ttl = SettingsLoader().get("rates_ttl_seconds", RATES_TTL_DEFAULT)
-    age_seconds = (now - refreshed_at).total_seconds()
-    return age_seconds < ttl
+    return (now - refreshed_at).total_seconds() < ttl
 
 
 def get_rates(with_meta=False):
     """Возвращает словарь курсов из rates.json
-    Если кеш устарел — вызывает refresh_rates(). Если refresh_rates()
-    бросает ApiRequestError — пробрасывает дальше"""
+    Если кеш устарел — вызывает refresh_rates()"""
 
     db = DatabaseManager()
-    data, meta = _extract_rates(db.read(RATES_FILE, {}))
+    pairs, last_refresh = _extract_rates(db.read(RATES_FILE, {}))
 
-    if not _is_rates_fresh(meta):
+    if not _is_rates_fresh(last_refresh):
         refresh_rates()
-        data, meta = _extract_rates(db.read(RATES_FILE, {}))
+        pairs, last_refresh = _extract_rates(db.read(RATES_FILE, {}))
 
     if with_meta:
-        return data, meta
-    return data
+        return pairs, {"last_refresh": last_refresh}
+    return pairs
 
 
 # валидаторы
 
 def validate_amount(amount):
-    """Проверяет, что сумма — положительное число"""
+    """Проверяет, что сумма — положительное число
+    Дополнительная проверка на nan, inf
+    """
 
-    if type(amount) not in (int, float):
-        raise ValueError("'amount' должен быть положительным числом")
-    if amount <= 0:
+    if (type(amount) not in (int, float)
+            or not math.isfinite(amount)
+            or amount <= 0):
         raise ValueError("'amount' должен быть положительным числом")
 
 
