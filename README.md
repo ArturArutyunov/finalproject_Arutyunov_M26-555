@@ -61,7 +61,7 @@ python main.py
 
 Появится приглашение:
 
-`ValutaTrade Hub. Введите команду (exit/quit для выхода)`
+`ValutaTrade Hub. Введите команду (help - для получения списка доступных команд. exit/quit для выхода)`
 
 Выход — `exit`, `quit` или Ctrl+C.
 
