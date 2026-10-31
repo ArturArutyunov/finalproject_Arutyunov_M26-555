@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 
-from .exceptions import CurrencyNotFoundError
 from ..constants import (
-    CURRENCY_CODE_MIN_LENGTH,
     CURRENCY_CODE_MAX_LENGTH,
+    CURRENCY_CODE_MIN_LENGTH,
     MARKET_CAP_DECIMALS,
 )
+from .exceptions import CurrencyNotFoundError
+
 
 class Currency(ABC):
     """Класс для абстрактной валюты"""
@@ -89,8 +90,10 @@ _CURRENCIES = {
     "USD": FiatCurrency("US Dollar", "USD", "United States"),
     "EUR": FiatCurrency("Euro", "EUR", "Eurozone"),
     "RUB": FiatCurrency("Russian Ruble", "RUB", "Russia"),
+    "GBP": FiatCurrency("Pound Sterling", "GBP", "United Kingdom"),
     "BTC": CryptoCurrency("Bitcoin", "BTC", "SHA-256", 1.12e12),
     "ETH": CryptoCurrency("Ethereum", "ETH", "Ethash", 4.0e11),
+    "SOL": CryptoCurrency("Solana", "SOL", "Proof-of-History", 8.0e10),
 }
 
 

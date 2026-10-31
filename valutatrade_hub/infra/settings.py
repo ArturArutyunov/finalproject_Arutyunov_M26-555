@@ -2,8 +2,8 @@
 import tomllib
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-PYPROJECT_FILE = ROOT_DIR / "pyproject.toml"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+PYPROJECT_FILE = BASE_DIR / "pyproject.toml"
 SECTION = "valutatrade"
 
 _MISSING = object()
@@ -12,7 +12,7 @@ class SettingsLoader:
     """Единственный экземпляр конфигурации.
     Способ Singleton: __new__. Выбран за минимализм и читаемость
     Хранит значения из [tool.valutatrade] или default
-ъ   Для обновления конифгурации необходимо вызвать reload()
+    Для обновления конифгурации необходимо вызвать reload()
     """
 
     _instance = None

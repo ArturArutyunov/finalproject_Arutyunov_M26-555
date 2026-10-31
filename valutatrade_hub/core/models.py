@@ -1,8 +1,8 @@
 import hmac
 
-from .utils import get_rates, hash_password, validate_currency_code
+from ..constants import BASE_CURRENCY, MIN_PASSWORD_LENGTH
 from .exceptions import InsufficientFundsError
-from ..constants import MIN_PASSWORD_LENGTH, BASE_CURRENCY
+from .utils import get_rates, hash_password, validate_currency_code
 
 
 class User:
@@ -204,11 +204,12 @@ class Portfolio:
             return None
         return self._wallets.get(currency_code.strip().upper())
 
-    def get_total_value(self, base_currency=BASE_CURRENCY):
+    def get_total_value(self, base_currency=BASE_CURRENCY, rates=None):
         """Считает суммарную стоимость всех кошельков в основной валюте"""
-
+        
         base = base_currency.strip().upper()
-        rates = get_rates()
+        if rates is None:
+            rates = get_rates()
 
         if base == BASE_CURRENCY:
             base_rate = 1.0
@@ -225,7 +226,6 @@ class Portfolio:
             else:
                 key = f"{code}_{BASE_CURRENCY}"
                 if key not in rates:
-                    print(f"Курс для {code} неизвестен, валюта пропущена")
                     continue
                 rate = rates[key]["rate"]
             total += wallet.balance * rate / base_rate

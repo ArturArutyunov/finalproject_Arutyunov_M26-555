@@ -1,5 +1,6 @@
 from ..constants import BALANCE_DECIMALS
 
+
 class InsufficientFundsError(Exception):
     """Недостаточно средств на кошельке"""
 
@@ -11,7 +12,7 @@ class InsufficientFundsError(Exception):
         )
 
 
-class CurrencyNotFoundError(KeyError):
+class CurrencyNotFoundError(Exception):
     """Валюта не найдена в реестре"""
 
     def __init__(self, code):

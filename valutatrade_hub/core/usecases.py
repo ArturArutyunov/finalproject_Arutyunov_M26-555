@@ -1,24 +1,23 @@
 import secrets
 from datetime import datetime
 
-from .models import Portfolio, User, Wallet
-from .currencies import get_currency
-from ..infra.settings import SettingsLoader
-from ..decorators import log_action
-from ..infra.database import DatabaseManager
 from ..constants import (
     MIN_PASSWORD_LENGTH,
-    SALT_BYTES,
     PORTFOLIOS_FILE,
+    SALT_BYTES,
     USERS_FILE,
 )
+from ..decorators import log_action
+from ..infra.database import DatabaseManager
+from ..infra.settings import SettingsLoader
+from .currencies import get_currency
+from .models import Portfolio, User, Wallet
 from .utils import (
     get_rates,
     hash_password,
     validate_amount,
     validate_currency_code,
 )
-
 
 _BASE_CURRENCY = SettingsLoader().get("default_base_currency")
 
@@ -200,13 +199,14 @@ def get_portfolio_info(user_id, base_currency=_BASE_CURRENCY):
     base = base_currency_obj.code
     rates = get_rates()
 
-    if base != _BASE_CURRENCY and f"{base}_{_BASE_CURRENCY}" not in rates and f"{_BASE_CURRENCY}_{base}" not in rates:
+    if (base != _BASE_CURRENCY
+            and f"{base}_{_BASE_CURRENCY}" not in rates
+            and f"{_BASE_CURRENCY}_{base}" not in rates):
         raise ValueError(f"Неизвестная базовая валюта '{base}'")
 
     portfolio = load_portfolio(user_id)
 
     rows = []
-    total = 0.0
     for code, wallet in portfolio.wallets.items():
         try:
             value = convert(wallet.balance, code, base, rates)
@@ -218,7 +218,8 @@ def get_portfolio_info(user_id, base_currency=_BASE_CURRENCY):
             "balance": wallet.balance,
             "value": value,
         })
-        total += value
+
+    total = portfolio.get_total_value(base, rates)
 
     return {
         "user": portfolio.user,
@@ -237,7 +238,7 @@ def buy(user_id, currency_code, amount):
 
     validate_amount(amount)
     currency = get_currency(currency_code)
-    code = code = currency.code
+    code = currency.code
     if code == _BASE_CURRENCY:
         raise ValueError(f"Нельзя купить {_BASE_CURRENCY} за {_BASE_CURRENCY}")
 
@@ -333,8 +334,11 @@ def get_rate_info(code_from, code_to):
         updated_at = rates[inverse_key].get("updated_at")
     else:
         try:
-            from_usd = 1.0 if from_code == _BASE_CURRENCY else rates[f"{from_code}_{_BASE_CURRENCY}"]["rate"]
-            to_usd = 1.0 if to_code == _BASE_CURRENCY else rates[f"{to_code}_{_BASE_CURRENCY}"]["rate"]
+            from_usd = (1.0 if from_code == _BASE_CURRENCY
+                else rates[f"{from_code}_{_BASE_CURRENCY}"]["rate"])
+            to_usd = (1.0 if to_code == _BASE_CURRENCY
+                    else rates[f"{to_code}_{_BASE_CURRENCY}"]["rate"])
+
             rate = from_usd / to_usd
 
             stamps = []

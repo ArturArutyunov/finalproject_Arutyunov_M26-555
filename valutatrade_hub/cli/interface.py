@@ -1,20 +1,31 @@
+import shlex
 from functools import wraps
 
 from valutatrade_hub.constants import (
-    BASE_CURRENCY,
     BALANCE_DECIMALS,
     MONEY_DECIMALS,
+    RATES_FILE,
     SEPARATOR_LENGTH,
 )
 from valutatrade_hub.core import usecases
-from valutatrade_hub.core.utils import format_rate, format_timestamp
 from valutatrade_hub.core.currencies import supported_codes
 from valutatrade_hub.core.exceptions import (
     ApiRequestError,
     CurrencyNotFoundError,
     InsufficientFundsError,
 )
+from valutatrade_hub.core.utils import format_rate, format_timestamp
+from valutatrade_hub.infra.database import DatabaseManager
+from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.parser_service.api_clients import (
+    CoinGeckoClient,
+    ExchangeRateApiClient,
+)
+from valutatrade_hub.parser_service.config import ParserConfig
+from valutatrade_hub.parser_service.storage import ParserStorage
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
+_BASE_CURRENCY = SettingsLoader().get("default_base_currency")
 
 def login_required(func):
     """Декоратор: выполнить команду только для залогиненного пользователя"""
@@ -44,6 +55,8 @@ class CLI:
             "buy": self.cmd_buy,
             "sell": self.cmd_sell,
             "get-rate": self.cmd_get_rate,
+            "show-rates": self.cmd_show_rates,
+            "update-rates": self.cmd_update_rates,
             "help": self.cmd_help,
         }
 
@@ -139,7 +152,7 @@ class CLI:
             print("Ошибка: неверный формат аргументов")
             return
 
-        base = parsed.get("base", BASE_CURRENCY)
+        base = parsed.get("base", _BASE_CURRENCY)
 
         try:
             info = usecases.get_portfolio_info(self._current_user_id, base)
@@ -209,12 +222,12 @@ class CLI:
 
         code = result["currency_code"]
         print(f"Покупка выполнена: {result['amount']:.{BALANCE_DECIMALS}f} {code} "
-              f"по курсу {format_rate(result['rate'])} {BASE_CURRENCY}/{code}")
+              f"по курсу {format_rate(result['rate'])} {_BASE_CURRENCY}/{code}")
         print("Изменения в портфеле:")
         print(f"- {code}: было {result['balance_before']:.{BALANCE_DECIMALS}f} "
               f"→ стало {result['balance_after']:.{BALANCE_DECIMALS}f}")
         print(f"Оценочная стоимость покупки: "
-              f"{result['cost_usd']:,.{MONEY_DECIMALS}f} {BASE_CURRENCY}")
+              f"{result['cost_usd']:,.{MONEY_DECIMALS}f} {_BASE_CURRENCY}")
 
     @login_required
     def cmd_sell(self, args):
@@ -256,11 +269,12 @@ class CLI:
 
         code = result["currency_code"]
         print(f"Продажа выполнена: {result['amount']:.{BALANCE_DECIMALS}f} {code} "
-              f"по курсу {format_rate(result['rate'])} {BASE_CURRENCY}/{code}")
+              f"по курсу {format_rate(result['rate'])} {_BASE_CURRENCY}/{code}")
         print("Изменения в портфеле:")
         print(f"- {code}: было {result['balance_before']:.{BALANCE_DECIMALS}f} "
               f"→ стало {result['balance_after']:.{BALANCE_DECIMALS}f}")
-        print(f"Оценочная стоимость продажи: {result['income_usd']:,.{MONEY_DECIMALS}f} {BASE_CURRENCY}")
+        print(f"Оценочная стоимость продажи: "
+              f"{result['income_usd']:,.{MONEY_DECIMALS}f} {_BASE_CURRENCY}")
 
     @login_required
     def cmd_get_rate(self, args):
@@ -300,18 +314,171 @@ class CLI:
             print(f"Обратный курс {info['to']}→{info['from']}: "
                   f"{rev_str} (обновлено: {rev_updated})")
 
+
+    def cmd_update_rates(self, args):
+        """Обработчик команды update-rates.
+        Обновить курсы через Parser Service"""
+
+        parsed = self._parse_args(args)
+        if parsed is None:
+            print("Ошибка: неверный формат аргументов")
+            return
+
+        config = ParserConfig()
+        all_clients = [
+            CoinGeckoClient(config),
+            ExchangeRateApiClient(config),
+        ]
+
+        source_arg = parsed.get("source")
+        if source_arg is not None:
+            normalized = source_arg.strip().lower()
+            aliases = {k.lower(): v for k, v in config.SOURCE_ALIASES.items()}
+            if normalized not in aliases:
+                print(f"Неизвестный источник: '{source_arg}'")
+                print(f"Доступные: {', '.join(config.SOURCE_ALIASES.keys())}")
+                return
+            target = aliases[normalized]
+            clients = [c for c in all_clients if c.SOURCE_NAME == target]
+        else:
+            clients = all_clients
+
+        print("Начало обновления...")
+        updater = RatesUpdater(clients=clients, storage=ParserStorage())
+
+        try:
+            result = updater.run_update()
+        except ApiRequestError as e:
+            print(e)
+            return
+
+        for source_name, count in result["per_source"].items():
+            print(f"{source_name}: OK ({count})")
+        for err in result["errors"]:
+            print(f"Ошибка: {err}")
+
+        if result["errors"]:
+            print("Обновление завершено с ошибками. "
+                  "Подробности в logs/parser.log")
+        else:
+            total = len(result["pairs"])
+            ts = format_timestamp(result["last_refresh"])
+            print(f"Записано {total} пар. Последнее обновление: {ts}")
+
+
+    def cmd_show_rates(self, args):
+        """Обработчик show-rates
+        Синтаксис: [--currency X] [--top N] [--base X]"""
+
+        parsed = self._parse_args(args)
+        if parsed is None:
+            print("Ошибка: неверный формат аргументов")
+            return
+
+        db = DatabaseManager()
+        raw = db.read(RATES_FILE, {})
+        if not isinstance(raw, dict):
+            raw = {}
+        pairs_raw = raw.get("pairs", {})
+        if not isinstance(pairs_raw, dict):
+            pairs_raw = {}
+        last_refresh = raw.get("last_refresh")
+
+        if not pairs_raw:
+            print("Локальный кеш курсов пуст. "
+                  "Выполните 'update-rates', чтобы загрузить данные.")
+            return
+
+        base = parsed.get("base", _BASE_CURRENCY).strip().upper()
+
+        if base == _BASE_CURRENCY:
+            base_rate = 1.0
+        else:
+            base_key = f"{base}_{_BASE_CURRENCY}"
+            entry = pairs_raw.get(base_key)
+            if not isinstance(entry, dict):
+                print(f"Неизвестная базовая валюта '{base}'.")
+                return
+            base_rate = entry.get("rate")
+            if not isinstance(base_rate, (int, float)) or base_rate <= 0:
+                print(f"Неизвестная базовая валюта '{base}'.")
+                return
+
+        result = {}
+        result[f"{_BASE_CURRENCY}_{base}"] = (
+            1.0 if base == _BASE_CURRENCY else 1.0 / base_rate
+        )
+        for pair_key, entry in pairs_raw.items():
+            if not isinstance(entry, dict):
+                continue
+            rate = entry.get("rate")
+            if not isinstance(rate, (int, float)) or rate <= 0:
+                continue
+            parts = pair_key.split("_", 1)
+            if len(parts) != 2:
+                continue
+            from_code = parts[0]
+            if from_code == base:
+                result[f"{from_code}_{base}"] = 1.0
+            else:
+                result[f"{from_code}_{base}"] = rate / base_rate
+
+        currency = parsed.get("currency")
+        if currency is not None:
+            currency = currency.strip().upper()
+            key = f"{currency}_{base}"
+            if key not in result:
+                print(f"Курс для '{currency}' не найден в кеше.")
+                return
+            result = {key: result[key]}
+
+        top = None
+        if "top" in parsed:
+            try:
+                top = int(parsed["top"])
+            except (TypeError, ValueError):
+                print("'--top' должен быть целым числом")
+                return
+            if top <= 0:
+                print("'--top' должен быть положительным")
+                return
+
+        if top is not None:
+            crypto_codes = set(ParserConfig().CRYPTO_CURRENCIES)
+            crypto_items = [
+                (k, v) for k, v in result.items()
+                if k.split("_", 1)[0] in crypto_codes
+            ]
+            sorted_items = sorted(
+                crypto_items, key=lambda kv: kv[1], reverse=True
+            )[:top]
+        else:
+            sorted_items = sorted(result.items())
+
+        if not sorted_items:
+            print("Нет подходящих курсов.")
+            return
+
+        ts = format_timestamp(last_refresh)
+        print(f"Курсы из кеша (обновлено: {ts}):")
+        for pair, value in sorted_items:
+            print(f"- {pair}: {format_rate(value)}")
+
+
     def cmd_help(self, args):
         """Обработать help."""
         print("Доступные команды:")
-        print("  register --username <имя> --password <пароль>   — регистрация")
-        print("  login --username <имя> --password <пароль>      — вход")
-        print("  logout                                          — выход из системы")
-        print("  show-portfolio [--base <код>]                   — портфель и итог")
-        print("  buy --currency <код> --amount <число>           — покупка")
-        print("  sell --currency <код> --amount <число>          — продажа")
-        print("  get-rate --from <код> --to <код>                — курс")
-        print("  help                                            — эта справка")
-        print("  exit / quit                                     — выход из REPL")
+        print("  register --username <имя> --password <пароль>     — регистрация")
+        print("  login --username <имя> --password <пароль>        — вход")
+        print("  logout                                            — выход из системы")
+        print("  show-portfolio [--base <код>]                     — портфель и итог")
+        print("  buy --currency <код> --amount <число>             — покупка")
+        print("  sell --currency <код> --amount <число>            — продажа")
+        print("  get-rate --from <код> --to <код>                  — курс")
+        print("  update-rates [--source <coingecko|exchangerate>]  — обновить курсы")
+        print("  show-rates [--currency X] [--top N] [--base X]    — курсы из кеша")
+        print("  help                                              — эта справка")
+        print("  exit / quit                                       — выход из REPL")
             
     # диспетчеризация и repl
 
@@ -332,7 +499,8 @@ class CLI:
     def run(self):
         """Интерактивный режим: читает команды из консоли до ввода exit/quit"""
 
-        print("ValutaTrade Hub. Введите команду (exit/quit для выхода)")
+        print("ValutaTrade Hub. Введите команду "
+        "(help - для получения списка доступных команд. exit/quit для выхода)")
         while True:
             try:
                 line = input("> ").strip()
@@ -343,5 +511,9 @@ class CLI:
                 continue
             if line in ("exit", "quit"):
                 break
-            parts = line.split()
+            try:
+                parts = shlex.split(line)
+            except ValueError:
+                print("Ошибка: неверный формат аргументов")
+                continue
             self.dispatch(parts)
